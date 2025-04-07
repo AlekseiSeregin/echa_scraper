@@ -10,18 +10,17 @@ import sys
 import time
 
 
+URL = "https://echa.europa.eu/information-on-chemicals"
 COOKIE_BUTTON = "a.wt-ecl-button.wt-ecl-button--primary.cck-actions-button[href='#accept']"
 DISCLAIMER_CHECKBOX = "disclaimerIdCheckboxLabel"
 SEARCH_FIELD = "autocompleteKeywordInput"
 SEARCH_BUTTON = "_disssimplesearchhomepage_WAR_disssearchportlet_searchButton"
-URL = "https://echa.europa.eu/information-on-chemicals"
 NOT_FOUND_BANNER = "alert alert-info "
 DRIVER_PATH = "chromedriver.exe"
 # CAS_NUMBER = "2785-89-9"
 CAS_NUMBER = "7440-48-4"
 LANG_ELEM = "languageId"
 LANG = "en_GB"
-
 TIMEOUT = 5
 
 
@@ -29,62 +28,72 @@ def find_elem(timeout, search_elem, by_what, driver):
     return WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((by_what, search_elem)))
 
 
-# Function to extract classification data
-def extract_classification_data(driver):
-    classification_data = []
-
+def extract_classification_data(driver, classification_data):
     try:
-        # Wait for the table containing the classification data to be present
         classification_table = WebDriverWait(driver, 1).until(
-            EC.presence_of_element_located(
-                (By.CLASS_NAME, "CLPtable"))
-        )
+            EC.presence_of_element_located((By.XPATH,
+                                            "//span[text()='CLP Classification (Table 3)']/following::table[contains(@class, 'CLPtable')]")))
+    except TimeoutException:
+        try:
+            classification_table = WebDriverWait(driver, 1).until(
+                EC.presence_of_element_located((By.XPATH,
+                                                "//span[normalize-space(text())='Notified classification and labelling according to CLP criteria']/following::table[contains(@class, 'CLPtable')]"))
+            )
 
-        # Wait until the table body is populated (ensure dynamic content is loaded)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_all_elements_located((By.XPATH,
-                                                 "//table[contains(@class, 'CLPtable') and contains(@class, 'taglib-search-iterator')]//tr[contains(@class, 'results-row')]"))
-        )
+        except TimeoutException:
+            print("Neither the primary nor the secondary table was found.")
+            return None
 
-        # Check if the table exists
-        if classification_table:
-            rows = classification_table.find_elements(By.XPATH, ".//tbody//tr[contains(@class, 'results-row')]")
+    rows = classification_table.find_elements(By.CSS_SELECTOR, "tbody tr.results-row")
+    if not rows:
+        print("No classification rows found.")
+    else:
+        for ind, row in enumerate(rows):
+            # Check if this is a results-row (first batch)
+            if "alt" in row.get_attribute("class"):
+                break
+            # Extract data from this row
+            cols = row.find_elements(By.TAG_NAME, "td")
 
-            if not rows:
-                print("No classification rows found.")
-            else:
-                # Loop through each row and extract relevant data
-                for row in rows:
-                    # Extracting classification details
-                    hazard_class = row.find_element(By.XPATH, ".//td[1]").text.strip()
-                    hazard_statement = row.find_element(By.XPATH, ".//td[2]").text.strip()
-                    supplementary_hazard_statement = row.find_element(By.XPATH, ".//td[3]").text.strip() if len(
-                        row.find_elements(By.XPATH, ".//td[3]")) > 0 else ""
-                    signal_word = row.find_element(By.XPATH,
-                                                   ".//td[5]").text.strip()  # Adjusting for signal word column
-                    pictogram = row.find_element(By.XPATH, ".//td[6]//img").get_attribute("alt") if len(
-                        row.find_elements(By.XPATH, ".//td[6]//img")) > 0 else ""  # Pictogram column
+            classification_data["CLASSIFICATIONS"][ind] = {
+                "Hazard Class": cols[0].text,
+                'hazard_code': cols[1].text,
+            }
 
-                    # Append extracted data to the classification_data list
-                    classification_data.append({
-                        "Hazard Class": hazard_class,
-                        "Hazard Statement": hazard_statement,
-                        "Supplementary Hazard Statement": supplementary_hazard_statement,
-                        "Signal Word": signal_word,
-                        "Pictogram": pictogram
-                    })
+            # cells = row.find_elements(By.TAG_NAME, "td")
+            # # Only process rows that have at least 2 cells
+            # if len(cells) >= 2:
+            #     # Check for empty cells and handle accordingly
+            #     hazard_class = cells[0].text.strip() if cells[0].text.strip() != '&nbsp;' else None
+            #     hazard_code = cells[1].text.strip() if cells[1].text.strip() != '&nbsp;' else None
+            #
+            #     # Extract further data if available
+            #     hazard_statement = cells[2].text.strip() if len(cells) > 2 and cells[
+            #         2].text.strip() != '&nbsp;' else None
+            #     # classification_data.append({
+            #     #     'hazard_class': hazard_class,
+            #     #     'hazard_code': hazard_code,
+            #     #     'hazard_statement': hazard_statement
+            #     # })
+            #     classification_data["CLASSIFICATIONS"][ind] = {
+            #         "Hazard Class": hazard_class,
+            #         "Hazard Statement": hazard_statement,
+            #         'hazard_code': hazard_code,
+            #     }
 
-            # Return classification data
-            return classification_data
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
+            # hazard_class = row.find_elements(By.CSS_SELECTOR, "td.cli-vertical-align-center")[0].text
+            # hazard_statement = row.find_elements(By.CSS_SELECTOR, "td.cli-vertical-align-center")[1].text
+            #
+            # classification_data["CLASSIFICATIONS"][ind] = {
+            #     "Hazard Class": hazard_class,
+            #     "Hazard Statement": hazard_statement,
+            # }
 
     return classification_data
 
 
-# Function to save data in JSON format
-def save_data_to_json(data, filename="classification_data.json"):
+def save_data_to_json(data, filename="results/classification_data.json"):
     try:
         with open(filename, 'w') as json_file:
             json.dump(data, json_file, indent=4)
@@ -179,8 +188,13 @@ if button:
     # Click the button
     button.click()
 
-# Extract the classification data
-classification_data = extract_classification_data(driver)
+# Get all open window handles
+window_handles = driver.window_handles
+# Switch to the second tab (index 1, as it's 0-based indexing)
+driver.switch_to.window(window_handles[1])
+# Fill out the classification data
+classification_data = {"CAS_NUMBER": CAS_NUMBER, "CLASSIFICATIONS": {}}
+extract_classification_data(driver, classification_data)
 
 # If classification data exists, save it to a JSON file
 if classification_data:

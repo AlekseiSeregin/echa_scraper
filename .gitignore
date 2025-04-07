@@ -103,3 +103,6 @@ coverage.xml
 
 # Ignore environments
 .envrc
+
+# Test results
+results/

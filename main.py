@@ -4,6 +4,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
+import json
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import sys
 import time
 
@@ -12,9 +14,11 @@ COOKIE_BUTTON = "a.wt-ecl-button.wt-ecl-button--primary.cck-actions-button[href=
 DISCLAIMER_CHECKBOX = "disclaimerIdCheckboxLabel"
 SEARCH_FIELD = "autocompleteKeywordInput"
 SEARCH_BUTTON = "_disssimplesearchhomepage_WAR_disssearchportlet_searchButton"
+URL = "https://echa.europa.eu/information-on-chemicals"
 NOT_FOUND_BANNER = "alert alert-info "
 DRIVER_PATH = "chromedriver.exe"
-CAS_NUMBER = "2785-89-9"
+# CAS_NUMBER = "2785-89-9"
+CAS_NUMBER = "7440-48-4"
 LANG_ELEM = "languageId"
 LANG = "en_GB"
 
@@ -25,7 +29,70 @@ def find_elem(timeout, search_elem, by_what, driver):
     return WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((by_what, search_elem)))
 
 
-URL = "https://echa.europa.eu/information-on-chemicals"
+# Function to extract classification data
+def extract_classification_data(driver):
+    classification_data = []
+
+    try:
+        # Wait for the table containing the classification data to be present
+        classification_table = WebDriverWait(driver, 1).until(
+            EC.presence_of_element_located(
+                (By.CLASS_NAME, "CLPtable"))
+        )
+
+        # Wait until the table body is populated (ensure dynamic content is loaded)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.XPATH,
+                                                 "//table[contains(@class, 'CLPtable') and contains(@class, 'taglib-search-iterator')]//tr[contains(@class, 'results-row')]"))
+        )
+
+        # Check if the table exists
+        if classification_table:
+            rows = classification_table.find_elements(By.XPATH, ".//tbody//tr[contains(@class, 'results-row')]")
+
+            if not rows:
+                print("No classification rows found.")
+            else:
+                # Loop through each row and extract relevant data
+                for row in rows:
+                    # Extracting classification details
+                    hazard_class = row.find_element(By.XPATH, ".//td[1]").text.strip()
+                    hazard_statement = row.find_element(By.XPATH, ".//td[2]").text.strip()
+                    supplementary_hazard_statement = row.find_element(By.XPATH, ".//td[3]").text.strip() if len(
+                        row.find_elements(By.XPATH, ".//td[3]")) > 0 else ""
+                    signal_word = row.find_element(By.XPATH,
+                                                   ".//td[5]").text.strip()  # Adjusting for signal word column
+                    pictogram = row.find_element(By.XPATH, ".//td[6]//img").get_attribute("alt") if len(
+                        row.find_elements(By.XPATH, ".//td[6]//img")) > 0 else ""  # Pictogram column
+
+                    # Append extracted data to the classification_data list
+                    classification_data.append({
+                        "Hazard Class": hazard_class,
+                        "Hazard Statement": hazard_statement,
+                        "Supplementary Hazard Statement": supplementary_hazard_statement,
+                        "Signal Word": signal_word,
+                        "Pictogram": pictogram
+                    })
+
+            # Return classification data
+            return classification_data
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+    return classification_data
+
+
+# Function to save data in JSON format
+def save_data_to_json(data, filename="classification_data.json"):
+    try:
+        with open(filename, 'w') as json_file:
+            json.dump(data, json_file, indent=4)
+        print(f"Data successfully saved to {filename}.")
+    except Exception as e:
+        print(f"An error occurred while saving to JSON: {e}")
+
+
 service = Service(executable_path="chromedriver.exe")
 driver = webdriver.Chrome(service=service)
 driver.get(URL)
@@ -90,7 +157,6 @@ if cas_value == CAS_NUMBER:
 else:
     print(f"❌ No match. Found: {cas_value}, Expected: {CAS_NUMBER}")
 
-
 # Wait until the table loads and the first substance name link appears
 first_result_link = WebDriverWait(driver, 10).until(
     EC.element_to_be_clickable((
@@ -102,5 +168,25 @@ first_result_link = WebDriverWait(driver, 10).until(
 # Click it
 first_result_link.click()
 
-time.sleep(10)
+
+# Wait until the button is clickable
+button = WebDriverWait(driver, 10).until(
+    EC.element_to_be_clickable((
+        By.ID, "_disssubsinfo_WAR_disssubsinfoportlet_dataset-cnl-button"
+    ))
+)
+if button:
+    # Click the button
+    button.click()
+
+# Extract the classification data
+classification_data = extract_classification_data(driver)
+
+# If classification data exists, save it to a JSON file
+if classification_data:
+    save_data_to_json(classification_data)
+else:
+    print("No classification data to save.")
+
+time.sleep(3)
 driver.quit()
